@@ -1,8 +1,8 @@
 // swift-tools-version:5.9
 // BINARY distribution branch consumed by the VPN app. Ships the prebuilt
-// WireGuardKit.xcframework so the consumer never compiles WireGuard from source
-// (which Xcode 26 cannot do for this package). Rebuild via the CI workflow on
-// `master`, then bump url + checksum here.
+// WireGuardKit.xcframework (Go engine baked in, Swift module included) so the
+// consumer never compiles WireGuard from source. Rebuild via CI on `master`,
+// then bump url + checksum here.
 
 import PackageDescription
 
@@ -15,8 +15,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "WireGuardKit",
-            url: "https://github.com/itsalemam-sudo/wireguard-apple/releases/download/xcframework-6/WireGuardKit.xcframework.zip",
-            checksum: "e36fcaa0e1dca7379a63f8ab1114e961de9e472f422110e5dff57827fb8afe26"
+            url: "https://github.com/itsalemam-sudo/wireguard-apple/releases/download/xcframework-8/WireGuardKit.xcframework.zip",
+            checksum: "7f867de1640b3d1be46f07d790b6fd2853e3f2a41beec546c66bfa16403ccee8"
         )
     ]
 )
