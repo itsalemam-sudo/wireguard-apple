@@ -63,6 +63,12 @@ jobs:
           LOG="$PWD/build/xcodebuild.log"
           mkdir -p build
 
+          { echo "=== swift --version ==="; swift --version 2>&1; \
+            echo "=== xcodebuild -version ==="; xcodebuild -version 2>&1; \
+            echo "=== xcodebuild -list ==="; xcodebuild -list 2>&1; \
+            echo "=== Package.swift ==="; cat Package.swift; \
+            echo "=== begin xcodebuild build ==="; } | tee "$LOG"
+
           set -x
           xcodebuild build \
             -scheme WireGuardKit \
@@ -75,7 +81,7 @@ jobs:
             IPHONEOS_DEPLOYMENT_TARGET=16.4 \
             LIBRARY_SEARCH_PATHS="$PWD/Sources/WireGuardKitGo" \
             OTHER_LDFLAGS="-lwg-go -framework CoreFoundation -framework Security -lresolv" \
-            2>&1 | tee "$LOG"
+            2>&1 | tee -a "$LOG"
           rc=${PIPESTATUS[0]}
           set +x
 
@@ -126,3 +132,21 @@ jobs:
             SPM checksum (paste into Package.swift binaryTarget):
             `${{ steps.checksum.outputs.checksum }}`
           files: build/WireGuardKit.xcframework.zip
+
+      # On failure, publish the full xcodebuild log to a `ci-logs` branch so it
+      # can be inspected via the GitHub contents API (the raw Actions log host is
+      # not reachable from all environments). Pushing to ci-logs does not
+      # re-trigger this workflow (it only runs on master / manual dispatch).
+      - name: Publish log on failure
+        if: failure()
+        run: |
+          set -e
+          mkdir -p /tmp/lp && tail -300 "$PWD/build/xcodebuild.log" > /tmp/lp/ci-log.txt 2>/dev/null || echo "no xcodebuild.log produced" > /tmp/lp/ci-log.txt
+          cd "$RUNNER_TEMP"
+          rm -rf logpush && mkdir logpush && cd logpush
+          git init -q
+          git switch --orphan ci-logs
+          cp /tmp/lp/ci-log.txt ci-log.txt
+          git add ci-log.txt
+          git -c user.email=ci@local -c user.name=ci commit -q -m "CI log run ${{ github.run_number }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-logs
