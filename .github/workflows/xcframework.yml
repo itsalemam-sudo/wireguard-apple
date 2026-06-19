@@ -63,6 +63,12 @@ jobs:
           LOG="$PWD/build/xcodebuild.log"
           mkdir -p build
 
+          # The fork also contains the official WireGuard.xcodeproj. When both a
+          # .xcodeproj and Package.swift exist, xcodebuild targets the project and
+          # can't see the package's "WireGuardKit" scheme. Remove the app project
+          # (and any workspace) so xcodebuild builds the Swift package instead.
+          rm -rf WireGuard.xcodeproj ./*.xcworkspace 2>/dev/null || true
+
           { echo "=== swift --version ==="; swift --version 2>&1; \
             echo "=== xcodebuild -version ==="; xcodebuild -version 2>&1; \
             echo "=== xcodebuild -list ==="; xcodebuild -list 2>&1; \
