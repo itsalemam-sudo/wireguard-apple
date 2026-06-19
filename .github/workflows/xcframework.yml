@@ -33,6 +33,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.21.13"
+          cache: false
 
       # 1) Build the WireGuard Go engine as a static lib for iOS arm64 (device).
       #    No goruntime patch -> robust against the exact Go version.
@@ -49,32 +50,57 @@ jobs:
           rm -f libwg-go.h
           lipo -info libwg-go.a
 
-      # 2) Archive WireGuardKit as a distributable dynamic framework (device).
-      #    Explicit modules OFF here is fine — we control this xcodebuild call,
-      #    unlike the one EAS runs.
-      - name: Archive WireGuardKit.framework
+      # 2) Build WireGuardKit as a distributable dynamic framework (device), then
+      #    wrap it into an xcframework. We use `xcodebuild build` (not `archive`)
+      #    into a derivedData dir and pick the framework out of Build/Products —
+      #    this avoids the "scheme not configured for archive" quirk of bare SPM
+      #    packages. On any failure we surface xcodebuild's real error lines as
+      #    ::error:: annotations (readable via the GitHub API).
+      - name: Build framework + create xcframework
         run: |
-          set -euxo pipefail
-          xcodebuild archive \
+          set -uo pipefail
+          DD="$PWD/build/dd"
+          LOG="$PWD/build/xcodebuild.log"
+          mkdir -p build
+
+          set -x
+          xcodebuild build \
             -scheme WireGuardKit \
+            -configuration Release \
             -destination "generic/platform=iOS" \
-            -archivePath "$PWD/build/WireGuardKit-iOS" \
+            -derivedDataPath "$DD" \
             SKIP_INSTALL=NO \
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO \
             IPHONEOS_DEPLOYMENT_TARGET=16.4 \
             LIBRARY_SEARCH_PATHS="$PWD/Sources/WireGuardKitGo" \
-            OTHER_LDFLAGS="-lwg-go -framework CoreFoundation -framework Security -lresolv"
+            OTHER_LDFLAGS="-lwg-go -framework CoreFoundation -framework Security -lresolv" \
+            2>&1 | tee "$LOG"
+          rc=${PIPESTATUS[0]}
+          set +x
 
-      # 3) Wrap the framework into an xcframework and zip it.
-      - name: Create xcframework
-        run: |
-          set -euxo pipefail
-          FW="$PWD/build/WireGuardKit-iOS.xcarchive/Products/Library/Frameworks/WireGuardKit.framework"
-          ls -la "$(dirname "$FW")"
-          xcodebuild -create-xcframework \
-            -framework "$FW" \
-            -output "$PWD/build/WireGuardKit.xcframework"
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::xcodebuild tail"; tail -80 "$LOG" || true; echo "::endgroup::"
+            grep -iE "error:|is not currently configured|does not contain|cannot|no such|unable|ld: |linker|module" "$LOG" | tail -25 | while IFS= read -r line; do echo "::error::$line"; done
+            exit "$rc"
+          fi
+
+          echo "Searching for built framework under Build/Products..."
+          find "$DD/Build/Products" -name "WireGuardKit.framework" -type d -print || true
+          FW="$(find "$DD/Build/Products" -name "WireGuardKit.framework" -type d | head -1)"
+          if [ -z "$FW" ]; then
+            echo "::error::WireGuardKit.framework not found under Build/Products"
+            find "$DD/Build/Products" -maxdepth 3 -print | head -120 | while IFS= read -r p; do echo "::error::FOUND $p"; done
+            exit 1
+          fi
+          echo "Framework at: $FW"; ls -la "$FW"
+
+          xcodebuild -create-xcframework -framework "$FW" -output "$PWD/build/WireGuardKit.xcframework" 2>&1 | tee -a "$LOG"
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            grep -iE "error:|unable|cannot|does not contain" "$LOG" | tail -25 | while IFS= read -r line; do echo "::error::$line"; done
+            exit "$rc"
+          fi
           (cd build && zip -r -y WireGuardKit.xcframework.zip WireGuardKit.xcframework)
 
       # 4) Compute the SwiftPM checksum used by the binaryTarget(...) in Package.swift.
