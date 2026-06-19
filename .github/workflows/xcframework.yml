@@ -76,11 +76,11 @@ jobs:
             echo "=== begin xcodebuild build ==="; } | tee "$LOG"
 
           set -x
-          xcodebuild build \
+          xcodebuild archive \
             -scheme WireGuardKit \
             -configuration Release \
             -destination "generic/platform=iOS" \
-            -derivedDataPath "$DD" \
+            -archivePath "$PWD/build/WireGuardKit-iOS.xcarchive" \
             SKIP_INSTALL=NO \
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO \
@@ -97,15 +97,26 @@ jobs:
             exit "$rc"
           fi
 
-          echo "Searching for built framework under Build/Products..."
-          find "$DD/Build/Products" -name "WireGuardKit.framework" -type d -print || true
-          FW="$(find "$DD/Build/Products" -name "WireGuardKit.framework" -type d | head -1)"
+          ARCH="$PWD/build/WireGuardKit-iOS.xcarchive"
+          echo "Searching for archived framework..."
+          find "$ARCH/Products" -name "WireGuardKit.framework" -type d -print || true
+          FW="$(find "$ARCH/Products" -name "WireGuardKit.framework" -type d | head -1)"
           if [ -z "$FW" ]; then
-            echo "::error::WireGuardKit.framework not found under Build/Products"
-            find "$DD/Build/Products" -maxdepth 3 -print | head -120 | while IFS= read -r p; do echo "::error::FOUND $p"; done
+            echo "::error::WireGuardKit.framework not found in xcarchive"
+            find "$ARCH/Products" -maxdepth 4 -print | head -120 | while IFS= read -r p; do echo "::error::FOUND $p"; done
             exit 1
           fi
-          echo "Framework at: $FW"; ls -la "$FW"
+          echo "Framework at: $FW"; find "$FW" -maxdepth 2 -print
+
+          # Hard requirement: the framework MUST contain its Swift module, else the
+          # consumer gets "no such module 'WireGuardKit'" (this is what `xcodebuild
+          # build` got wrong — it left the swiftmodule as a sibling of the .framework).
+          if [ ! -d "$FW/Modules/WireGuardKit.swiftmodule" ]; then
+            echo "::error::framework is missing Modules/WireGuardKit.swiftmodule"
+            ls -la "$FW/Modules" 2>&1 | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          fi
+          echo "OK: framework contains Modules/WireGuardKit.swiftmodule"
 
           xcodebuild -create-xcframework -framework "$FW" -output "$PWD/build/WireGuardKit.xcframework" 2>&1 | tee -a "$LOG"
           rc=${PIPESTATUS[0]}
@@ -113,6 +124,14 @@ jobs:
             grep -iE "error:|unable|cannot|does not contain" "$LOG" | tail -25 | while IFS= read -r line; do echo "::error::$line"; done
             exit "$rc"
           fi
+
+          # Verify the module survived into the xcframework.
+          if ! find "$PWD/build/WireGuardKit.xcframework" -path "*Modules/WireGuardKit.swiftmodule*" | grep -q .; then
+            echo "::error::xcframework is missing the Swift module"
+            find "$PWD/build/WireGuardKit.xcframework" -print | head -60 | while IFS= read -r p; do echo "::error::$p"; done
+            exit 1
+          fi
+          echo "OK: xcframework contains the Swift module"
           (cd build && zip -r -y WireGuardKit.xcframework.zip WireGuardKit.xcframework)
 
       # 4) Compute the SwiftPM checksum used by the binaryTarget(...) in Package.swift.
