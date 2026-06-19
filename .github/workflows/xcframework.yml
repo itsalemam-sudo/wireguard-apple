@@ -1,0 +1,102 @@
+name: Build WireGuardKit xcframework
+
+# Compiles WireGuard (Swift + C + the Go engine) into a finished, distributable
+# WireGuardKit.xcframework and publishes it as a GitHub Release. The VPN app then
+# consumes that prebuilt binary instead of building the Swift Package from source
+# — which is what Xcode 26 cannot do (the "unable to resolve module dependency:
+# WireGuardKitC/WireGuardKitGo" failure).
+#
+# Goes in the wireguard-apple fork at: .github/workflows/xcframework.yml
+# Run it from the repo's "Actions" tab (workflow_dispatch) or on push to master.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "**.md"
+
+permissions:
+  contents: write # needed to create the Release
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode / SDK
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.13"
+
+      # 1) Build the WireGuard Go engine as a static lib for iOS arm64 (device).
+      #    No goruntime patch -> robust against the exact Go version.
+      - name: Build libwg-go.a (iOS arm64)
+        working-directory: Sources/WireGuardKitGo
+        run: |
+          set -euxo pipefail
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          CC_BIN="$(xcrun --sdk iphoneos -f clang)"
+          FLAGS="-isysroot $SDKROOT -arch arm64 -miphoneos-version-min=16.4"
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 CC="$CC_BIN" \
+            CGO_CFLAGS="$FLAGS" CGO_LDFLAGS="$FLAGS" \
+            go build -trimpath -ldflags=-w -buildmode=c-archive -o libwg-go.a .
+          rm -f libwg-go.h
+          lipo -info libwg-go.a
+
+      # 2) Archive WireGuardKit as a distributable dynamic framework (device).
+      #    Explicit modules OFF here is fine — we control this xcodebuild call,
+      #    unlike the one EAS runs.
+      - name: Archive WireGuardKit.framework
+        run: |
+          set -euxo pipefail
+          xcodebuild archive \
+            -scheme WireGuardKit \
+            -destination "generic/platform=iOS" \
+            -archivePath "$PWD/build/WireGuardKit-iOS" \
+            SKIP_INSTALL=NO \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO \
+            IPHONEOS_DEPLOYMENT_TARGET=16.4 \
+            LIBRARY_SEARCH_PATHS="$PWD/Sources/WireGuardKitGo" \
+            OTHER_LDFLAGS="-lwg-go -framework CoreFoundation -framework Security -lresolv"
+
+      # 3) Wrap the framework into an xcframework and zip it.
+      - name: Create xcframework
+        run: |
+          set -euxo pipefail
+          FW="$PWD/build/WireGuardKit-iOS.xcarchive/Products/Library/Frameworks/WireGuardKit.framework"
+          ls -la "$(dirname "$FW")"
+          xcodebuild -create-xcframework \
+            -framework "$FW" \
+            -output "$PWD/build/WireGuardKit.xcframework"
+          (cd build && zip -r -y WireGuardKit.xcframework.zip WireGuardKit.xcframework)
+
+      # 4) Compute the SwiftPM checksum used by the binaryTarget(...) in Package.swift.
+      - name: Compute SPM checksum
+        id: checksum
+        run: |
+          set -euxo pipefail
+          CS="$(swift package compute-checksum build/WireGuardKit.xcframework.zip)"
+          echo "checksum=$CS" >> "$GITHUB_OUTPUT"
+          echo "=============================================="
+          echo " SPM checksum: $CS"
+          echo "=============================================="
+
+      # 5) Publish the zip as a Release asset.
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: xcframework-${{ github.run_number }}
+          name: WireGuardKit xcframework build ${{ github.run_number }}
+          body: |
+            WireGuardKit.xcframework — iOS arm64 (device), built with library evolution.
+
+            SPM checksum (paste into Package.swift binaryTarget):
+            `${{ steps.checksum.outputs.checksum }}`
+          files: build/WireGuardKit.xcframework.zip

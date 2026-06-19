@@ -1,5 +1,10 @@
 // swift-tools-version:5.9
-// The swift-tools-version declares the minimum version of Swift required to build this package.
+// SOURCE build of the fork. This replaces Package.swift on the fork's `master`
+// branch. Only change vs upstream: the WireGuardKit product is `.dynamic` so the
+// CI workflow can archive it as a distributable WireGuardKit.framework.
+//
+// The app does NOT consume this branch. It consumes the `xcframework` branch
+// (see Package.xcframework.swift), which ships the prebuilt binary.
 
 import PackageDescription
 
@@ -10,7 +15,7 @@ let package = Package(
         .iOS(.v15)
     ],
     products: [
-        .library(name: "WireGuardKit", targets: ["WireGuardKit"])
+        .library(name: "WireGuardKit", type: .dynamic, targets: ["WireGuardKit"])
     ],
     dependencies: [],
     targets: [
