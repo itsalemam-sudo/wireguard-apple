@@ -108,15 +108,28 @@ jobs:
           fi
           echo "Framework at: $FW"; find "$FW" -maxdepth 2 -print
 
-          # Hard requirement: the framework MUST contain its Swift module, else the
-          # consumer gets "no such module 'WireGuardKit'" (this is what `xcodebuild
-          # build` got wrong — it left the swiftmodule as a sibling of the .framework).
+          # SwiftPM emits the .swiftmodule as a SIBLING of the .framework rather
+          # than inside it, so the archived framework has no Modules/ dir and
+          # consumers get "no such module 'WireGuardKit'". Move the swiftmodule
+          # into the framework's Modules/ to make it a self-contained binary.
+          if [ ! -d "$FW/Modules/WireGuardKit.swiftmodule" ]; then
+            SWMOD="$(find "$ARCH" "$HOME/Library/Developer/Xcode/DerivedData" -type d -name "WireGuardKit.swiftmodule" 2>/dev/null | grep -v "/Modules/" | head -1)"
+            echo "swiftmodule source: ${SWMOD:-<none>}"
+            if [ -n "$SWMOD" ]; then
+              mkdir -p "$FW/Modules/WireGuardKit.swiftmodule"
+              cp -R "$SWMOD/." "$FW/Modules/WireGuardKit.swiftmodule/"
+            fi
+          fi
+
+          # Hard requirement: the framework MUST contain its Swift module.
           if [ ! -d "$FW/Modules/WireGuardKit.swiftmodule" ]; then
             echo "::error::framework is missing Modules/WireGuardKit.swiftmodule"
-            ls -la "$FW/Modules" 2>&1 | while IFS= read -r l; do echo "::error::$l"; done
+            echo "candidate swiftmodule dirs:"
+            find "$ARCH" "$HOME/Library/Developer/Xcode/DerivedData" -type d -name "*.swiftmodule" 2>/dev/null | head -20 | while IFS= read -r l; do echo "::error::CAND $l"; done
             exit 1
           fi
           echo "OK: framework contains Modules/WireGuardKit.swiftmodule"
+          ls -la "$FW/Modules/WireGuardKit.swiftmodule"
 
           xcodebuild -create-xcframework -framework "$FW" -output "$PWD/build/WireGuardKit.xcframework" 2>&1 | tee -a "$LOG"
           rc=${PIPESTATUS[0]}
