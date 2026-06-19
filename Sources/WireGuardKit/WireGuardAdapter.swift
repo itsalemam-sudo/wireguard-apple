@@ -5,8 +5,8 @@ import Foundation
 import NetworkExtension
 
 #if SWIFT_PACKAGE
-import WireGuardKitGo
-import WireGuardKitC
+@_implementationOnly import WireGuardKitGo
+@_implementationOnly import WireGuardKitC
 #endif
 
 public enum WireGuardAdapterError: Error {

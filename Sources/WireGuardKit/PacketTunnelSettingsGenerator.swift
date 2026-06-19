@@ -6,7 +6,7 @@ import Network
 import NetworkExtension
 
 #if SWIFT_PACKAGE
-import WireGuardKitC
+@_implementationOnly import WireGuardKitC
 #endif
 
 /// A type alias for `Result` type that holds a tuple with source and resolved endpoint.
